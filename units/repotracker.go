@@ -77,7 +77,8 @@ func (j *repotrackerJob) Run(ctx context.Context) {
 		return
 	}
 
-	settings := j.env.Settings()
+	// settings := j.env.Settings()
+	settings, _ := evergreen.GetConfig(ctx)
 	if settings == nil {
 		j.AddError(errors.New("settings is empty"))
 		return
