@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net"
+	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -291,6 +294,7 @@ func NewEnvironment(ctx context.Context, confPath, versionID, clientS3Bucket str
 	catcher.Add(e.setupRoleManager(ctx, tracer))
 	catcher.Add(e.initTracer(ctx, versionID != "", tracer))
 	catcher.Add(e.initSSH(ctx, tracer))
+	catcher.Add(e.initRedisSmokeTest(ctx, tracer))
 	catcher.Extend(e.initQueues(ctx, tracer))
 
 	if catcher.HasErrors() {
@@ -1078,6 +1082,47 @@ func (e *envState) initTracer(ctx context.Context, useInternalDNS bool, tracer t
 		return nil
 	})
 
+	return nil
+}
+
+// initRedisSmokeTest verifies that the Redis service configured via the
+// REDIS_URL environment variable is reachable over TCP. It does not fail
+// startup if REDIS_URL is unset or the connection fails; the result is logged
+// so a deploy can be verified by inspecting pod logs.
+func (e *envState) initRedisSmokeTest(ctx context.Context, tracer trace.Tracer) error {
+	_, span := tracer.Start(ctx, "InitRedisSmokeTest")
+	defer span.End()
+
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		grip.Info(ctx, "REDIS_URL not set; skipping Redis smoke test.")
+		return nil
+	}
+
+	u, err := url.Parse(redisURL)
+	if err != nil {
+		grip.Warning(ctx, message.WrapError(err, message.Fields{
+			"message":   "parsing REDIS_URL",
+			"redis_url": redisURL,
+		}))
+		return nil
+	}
+
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", u.Host)
+	if err != nil {
+		grip.Warning(ctx, message.WrapError(err, message.Fields{
+			"message":   "dialing Redis",
+			"redis_url": redisURL,
+		}))
+		return nil
+	}
+	defer conn.Close()
+
+	grip.Info(ctx, message.Fields{
+		"message":   "Redis smoke test succeeded",
+		"redis_url": redisURL,
+	})
 	return nil
 }
 
